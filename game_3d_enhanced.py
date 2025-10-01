@@ -708,7 +708,7 @@ class Camera:
         
         # Project to screen coordinates
         screen_x = (rotated_x / (final_z * fov_factor)) * (screen_width / 2) + (screen_width / 2)
-        screen_y = (final_y / (final_z * fov_factor)) * (screen_height / 2) + (screen_height / 2)
+        screen_y = (-final_y / (final_z * fov_factor)) * (screen_height / 2) + (screen_height / 2)  # Flip Y-axis
         
         return (int(screen_x), int(screen_y), final_z)
 
