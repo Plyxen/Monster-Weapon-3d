@@ -451,11 +451,19 @@ class MazeMap:
         
         return treasures
     
+    def get_floor_height(self, x, z):
+        """Get floor height - always returns walkable floor level"""
+        # Always return base level (0) for any position - this is the walkable floor
+        return self.base_level
+    
     def get_height(self, x, z):
         """Get terrain height at given coordinates with bounds checking"""
         if 0 <= int(x) < self.width and 0 <= int(z) < self.height:
-            return self.terrain[int(z)][int(x)]
-        return self.wall_height  # Return wall height for out of bounds
+            maze_x, maze_z = int(x), int(z)
+            # Always return base level for player position queries
+            # This ensures player stays on the floor level
+            return self.base_level
+        return self.base_level  # Return floor level even for out of bounds
 
 
 
@@ -469,8 +477,8 @@ class Player:
         self.hp = self.max_hp
         self.velocity_y = 0  # Vertical velocity for jumping
         self.is_jumping = False
-        self.jump_strength = 3.0
-        self.gravity = -9.8
+        self.jump_strength = 5.0  # Stronger jump
+        self.gravity = -15.0  # Stronger gravity for better feel
         self.weapon = "kard"
         self.weapon_emoji = "⚔️"
         self.stats = create_stats()
@@ -480,61 +488,62 @@ class Player:
         
     def jump(self):
         """Make player jump if on ground"""
-        if not self.is_jumping:
+        if not self.is_jumping and abs(self.velocity_y) < 0.1:  # Only jump if on ground
             self.velocity_y = self.jump_strength
             self.is_jumping = True
     
+    def apply_physics(self, maze_map, dt=1.0/60.0):
+        """Apply physics: gravity, ground collision, etc."""
+        # Get floor height (always base_level for walkable areas)
+        floor_height = maze_map.get_floor_height(self.position.x, self.position.z)
+        player_height = 1.7  # Standard FPS player height (eye level)
+        ground_level = floor_height + player_height
+        
+        # Apply gravity
+        self.velocity_y += self.gravity * dt
+        
+        # Update Y position
+        self.position.y += self.velocity_y * dt
+        
+        # Ground collision
+        if self.position.y <= ground_level:
+            self.position.y = ground_level
+            self.velocity_y = 0
+            self.is_jumping = False
+        
+        # Prevent falling through floor
+        if self.position.y < ground_level:
+            self.position.y = ground_level
+            self.velocity_y = 0
+    
     def update_position(self, maze_map):
-        """Keep player at proper height in maze with jump physics"""
-        floor_height = maze_map.get_height(self.position.x, self.position.z)
+        """Update player position with physics"""
+        # Apply physics every frame
+        self.apply_physics(maze_map)
         
-        # Ensure floor_height is never None
-        if floor_height is None:
-            floor_height = maze_map.base_level
-            
-        # Much lower camera position
-        player_height = 0.2  # Very low camera height
-        target_y = floor_height + player_height
+        # Ensure minimum height is maintained
+        floor_height = maze_map.get_floor_height(self.position.x, self.position.z)
+        min_height = floor_height + 1.7  # Eye level height
         
-        # Apply gravity and jumping physics
-        if self.is_jumping:
-            # Update vertical velocity with gravity (frame-rate independent)
-            dt = 1.0 / 60.0  # Assume 60 FPS
-            self.velocity_y += self.gravity * dt
-            self.position.y += self.velocity_y * dt
-            
-            # Check if landed
-            if self.position.y <= target_y:
-                self.position.y = target_y
-                self.velocity_y = 0
-                self.is_jumping = False
-        else:
-            # Normal ground following when not jumping
-            height_diff = abs(self.position.y - target_y)
-            if height_diff > 0.1:
-                # Quick adjustment to proper floor height
-                self.position.y = target_y
+        if self.position.y < min_height and not self.is_jumping:
+            self.position.y = min_height
+            self.velocity_y = 0
     
     def can_move_to(self, new_x, new_z, maze_map):
-        """Maze-based collision detection"""
-        # Check map boundaries with margin
-        if not (1 <= new_x < maze_map.width - 1 and 1 <= new_z < maze_map.height - 1):
+        """Maze-based collision detection - only allow movement in walkable areas"""
+        # Check map boundaries
+        if not (0 <= new_x < maze_map.width and 0 <= new_z < maze_map.height):
             return False
         
-        # Check if destination is a wall in maze
+        # Check if destination is walkable in maze
         maze_x = int(new_x)
         maze_z = int(new_z)
         
-        # Make sure we're in bounds before checking maze
-        if (maze_x < 0 or maze_x >= maze_map.width or 
-            maze_z < 0 or maze_z >= maze_map.height):
-            return False
-            
-        if maze_map.maze[maze_z][maze_x] == 0:  # Wall
-            return False
+        # Only allow movement in walkable areas (corridors, rooms, doors)
+        if maze_map.maze[maze_z][maze_x] in [1, 2, 3]:  # Walkable areas
+            return True
         
-        # Already returned True for paths above, this shouldn't be reached
-        return True
+        return False  # Block movement into walls (0) or other non-walkable areas
     
     def move_forward(self, maze_map):
         """Move forward in the direction the camera is looking (W key)"""
@@ -1045,68 +1054,75 @@ class Renderer:
                 pass  # Skip invalid polygons
     
     def render_ground_plane(self, maze_map, player):
-        """Render textured ground plane with quad surfaces"""
-        grid_size = 4
+        """Render detailed floor plane for walkable areas only"""
+        grid_size = 1  # Smaller grid for more detail
         ground_quads = []
         
-        # Calculate visible range around player (increased for larger map)
-        start_x = max(0, int(player.position.x - 40))  # Further increased render range
-        end_x = min(maze_map.width, int(player.position.x + 40))
-        start_z = max(0, int(player.position.z - 40))
-        end_z = min(maze_map.height, int(player.position.z + 40))
+        # Calculate visible range around player
+        start_x = max(0, int(player.position.x - 30))
+        end_x = min(maze_map.width, int(player.position.x + 30))
+        start_z = max(0, int(player.position.z - 30))
+        end_z = min(maze_map.height, int(player.position.z + 30))
         
-        # Create ground plane quads
+        # Only render floor in walkable areas
         for z in range(start_z, end_z - grid_size, grid_size):
             for x in range(start_x, end_x - grid_size, grid_size):
-                # Create quad corners at ground level
-                corners = [
-                    Vector3D(x, maze_map.base_level, z),
-                    Vector3D(x + grid_size, maze_map.base_level, z),
-                    Vector3D(x + grid_size, maze_map.base_level, z + grid_size),
-                    Vector3D(x, maze_map.base_level, z + grid_size)
-                ]
-                
-                # Project to screen
-                screen_corners = []
-                total_distance = 0
-                
-                for corner in corners:
-                    screen_pos = self.camera.project_3d_to_2d(
-                        corner, player.position, player.rotation_x, player.rotation_y,
-                        self.width, self.height
-                    )
+                # Check if this area is walkable
+                if (0 <= x < maze_map.width and 0 <= z < maze_map.height and
+                    maze_map.maze[z][x] in [1, 2, 3]):  # Walkable areas only
                     
-                    if screen_pos and screen_pos[2] > 0:
-                        screen_corners.append((screen_pos[0], screen_pos[1]))
-                        total_distance += screen_pos[2]
-                
-                # Only render if all corners are visible
-                if len(screen_corners) == 4:
-                    avg_distance = total_distance / 4
-                    if avg_distance < 80:  # Increased quad render distance
-                        ground_quads.append((screen_corners, avg_distance, x, z))
+                    # Create floor quad at base level
+                    floor_y = maze_map.base_level
+                    corners = [
+                        Vector3D(x, floor_y, z),
+                        Vector3D(x + grid_size, floor_y, z),
+                        Vector3D(x + grid_size, floor_y, z + grid_size),
+                        Vector3D(x, floor_y, z + grid_size)
+                    ]
+                    
+                    # Project to screen
+                    screen_corners = []
+                    total_distance = 0
+                    
+                    for corner in corners:
+                        screen_pos = self.camera.project_3d_to_2d(
+                            corner, player.position, player.rotation_x, player.rotation_y,
+                            self.width, self.height
+                        )
+                        
+                        if screen_pos and screen_pos[2] > 0.1:
+                            screen_corners.append((screen_pos[0], screen_pos[1]))
+                            total_distance += screen_pos[2]
+                    
+                    # Only render if all corners are visible
+                    if len(screen_corners) == 4:
+                        avg_distance = total_distance / 4
+                        if avg_distance < 50:
+                            # Determine floor color based on room type
+                            if maze_map.maze[z][x] == 2:  # Room
+                                base_color = (60, 60, 80)  # Darker blue for rooms
+                            else:  # Corridor
+                                base_color = (50, 70, 50)  # Green for corridors
+                            
+                            ground_quads.append((screen_corners, avg_distance, base_color))
         
-        # Sort by distance
+        # Sort by distance (furthest first)
         ground_quads.sort(key=lambda q: q[1], reverse=True)
         
-        # Render ground quads
-        for screen_corners, distance, gx, gz in ground_quads:
-            if all(0 <= p[0] < self.width and 0 <= p[1] < self.height for p in screen_corners):
-                # Checkerboard pattern
-                checker = (gx // grid_size + gz // grid_size) % 2
-                base_color = (40, 80, 40) if checker else (50, 90, 50)
-                
-                # Distance fade
-                fade_factor = max(0.2, 1.0 - distance / 30)
+        # Render floor quads
+        for screen_corners, distance, base_color in ground_quads:
+            try:
+                # Distance-based lighting
+                fade_factor = max(0.3, 1.0 - distance / 25)
                 color = tuple(int(c * fade_factor) for c in base_color)
                 
-                try:
-                    pygame.draw.polygon(self.screen, color, screen_corners)
-                    # Add subtle grid lines
-                    grid_color = tuple(min(255, int(c * 1.2)) for c in color)
-                    pygame.draw.polygon(self.screen, grid_color, screen_corners, 1)
-                except:
-                    pass
+                pygame.draw.polygon(self.screen, color, screen_corners)
+                
+                # Add grid lines for texture
+                grid_color = tuple(min(255, int(c * 1.3)) for c in color)
+                pygame.draw.polygon(self.screen, grid_color, screen_corners, 1)
+            except:
+                pass
     
     def render_objects(self, maze_map, player):
         """Render monsters, treasures with enhanced 3D graphics"""
@@ -1366,10 +1382,11 @@ class Renderer:
             self.screen.blit(shadow_text, (self.width - 179, 16 + i * 20))
             self.screen.blit(control_text, (self.width - 180, 15 + i * 20))
         
-        # Position info with height and shadow
-        pos_text = self.small_font.render(f"Pozíció: ({player.position.x:.1f}, {player.position.y:.1f}, {player.position.z:.1f})", 
+        # Position and physics info with shadow
+        jump_status = "Jumping" if player.is_jumping else "On Ground"
+        pos_text = self.small_font.render(f"Pos: ({player.position.x:.1f}, {player.position.y:.1f}, {player.position.z:.1f}) | {jump_status}", 
                                         True, (255, 255, 0))
-        shadow_text = self.small_font.render(f"Pozíció: ({player.position.x:.1f}, {player.position.y:.1f}, {player.position.z:.1f})", 
+        shadow_text = self.small_font.render(f"Pos: ({player.position.x:.1f}, {player.position.y:.1f}, {player.position.z:.1f}) | {jump_status}", 
                                         True, (0, 0, 0))
         self.screen.blit(shadow_text, (18, 116))
         self.screen.blit(pos_text, (17, 115))
@@ -1432,64 +1449,94 @@ class Game3D:
         self.renderer = Renderer()
         self.maze_map = MazeMap()
         
-        # Find a good spawn position in maze - ensure it's a path (=1)
+        # Find a guaranteed spawn position inside walkable maze areas
         spawn_x = self.maze_map.width // 2
         spawn_z = self.maze_map.height // 2
-        
-        # Try to spawn in a room first
         spawn_found = False
-        if self.maze_map.rooms:
-            room = random.choice(self.maze_map.rooms)
-            spawn_x = room['center_x']
-            spawn_z = room['center_y']
-            # Verify room center is actually walkable
-            if (1 <= spawn_x < self.maze_map.width - 1 and 
-                1 <= spawn_z < self.maze_map.height - 1 and
-                self.maze_map.maze[spawn_z][spawn_x] == 1):  # Must be path
-                spawn_found = True
         
+        # Method 1: Try to spawn in a room center (most reliable)
+        if self.maze_map.rooms:
+            for room in self.maze_map.rooms:
+                test_x = room['center_x']
+                test_z = room['center_y']
+                # Check if room center is walkable
+                if (0 <= test_x < self.maze_map.width and 
+                    0 <= test_z < self.maze_map.height and
+                    self.maze_map.maze[test_z][test_x] in [1, 2, 3]):  # Any walkable area
+                    spawn_x, spawn_z = test_x, test_z
+                    spawn_found = True
+                    print(f"🏠 Spawned in room center at ({spawn_x}, {spawn_z})")
+                    break
+        
+        # Method 2: Search systematically for any walkable area
         if not spawn_found:
-            # Find any path space (=1) near center  
-            for offset in range(1, 25):  # Search wider area
-                for dx in range(-offset, offset + 1):
-                    for dz in range(-offset, offset + 1):
+            print("🔍 Searching for walkable spawn area...")
+            for offset in range(1, 30):  # Wider search
+                for dx in range(-offset, offset + 1, 2):  # Skip every other to speed up
+                    for dz in range(-offset, offset + 1, 2):
                         test_x = spawn_x + dx
                         test_z = spawn_z + dz
-                        if (1 <= test_x < self.maze_map.width - 1 and 
-                            1 <= test_z < self.maze_map.height - 1 and
-                            self.maze_map.maze[test_z][test_x] == 1):  # Must be path
+                        if (0 <= test_x < self.maze_map.width and 
+                            0 <= test_z < self.maze_map.height and
+                            self.maze_map.maze[test_z][test_x] in [1, 2, 3]):  # Walkable areas
                             spawn_x, spawn_z = test_x, test_z
                             spawn_found = True
+                            print(f"🎯 Found walkable area at ({spawn_x}, {spawn_z})")
                             break
                     if spawn_found:
                         break
                 if spawn_found:
                     break
             
-            # Fallback: force create a 3x3 spawn area with paths
-            if not spawn_found:
-                spawn_x = self.maze_map.width // 2
-                spawn_z = self.maze_map.height // 2
-                # Create 3x3 walkable area around spawn
-                for dx in range(-1, 2):
-                    for dz in range(-1, 2):
-                        if (0 <= spawn_x + dx < self.maze_map.width and 
-                            0 <= spawn_z + dz < self.maze_map.height):
-                            self.maze_map.maze[spawn_z + dz][spawn_x + dx] = 1  # Force path
-                print(f"⚠️ Forced 3x3 spawn area at ({spawn_x}, {spawn_z})")
+        # Method 3: Guaranteed fallback - find ANY walkable area in entire maze
+        if not spawn_found:
+            print("🚨 Emergency spawn search across entire maze...")
+            for z in range(1, self.maze_map.height - 1, 3):  # Skip areas for speed
+                for x in range(1, self.maze_map.width - 1, 3):
+                    if self.maze_map.maze[z][x] in [1, 2, 3]:  # Walkable
+                        spawn_x, spawn_z = x, z
+                        spawn_found = True
+                        print(f"🆘 Emergency spawn at ({spawn_x}, {spawn_z})")
+                        break
+                if spawn_found:
+                    break
+            
+        # Method 4: Last resort - force create walkable area
+        if not spawn_found:
+            spawn_x = self.maze_map.width // 2
+            spawn_z = self.maze_map.height // 2
+            # Force create 5x5 walkable area around center
+            for dx in range(-2, 3):
+                for dz in range(-2, 3):
+                    if (0 <= spawn_x + dx < self.maze_map.width and 
+                        0 <= spawn_z + dz < self.maze_map.height):
+                        self.maze_map.maze[spawn_z + dz][spawn_x + dx] = 2  # Force room
+            print(f"🔨 FORCED 5x5 spawn area at ({spawn_x}, {spawn_z})")
         
         self.player = Player(spawn_x, spawn_z)
         
-        # Force player to spawn at proper maze height
-        spawn_height = self.maze_map.base_level  # Use flat base level
-        safe_spawn_height = spawn_height + 0.2  # Very low camera position
-        self.player.position = Vector3D(spawn_x, safe_spawn_height, spawn_z)
-        print(f"🏰 MAZE spawn height: {safe_spawn_height} (floor: {spawn_height})")
+        # Force player to spawn at proper maze height using physics
+        floor_height = self.maze_map.base_level  # Always use base level for floor
+        player_eye_height = floor_height + 1.7  # Standard FPS eye level
+        self.player.position = Vector3D(spawn_x, player_eye_height, spawn_z)
+        self.player.velocity_y = 0  # Start with no vertical velocity
+        self.player.is_jumping = False  # Start on ground
+        
+        # Validate spawn position
+        cell_type = self.maze_map.maze[int(spawn_z)][int(spawn_x)]
+        cell_names = {0: "Wall", 1: "Corridor", 2: "Room", 3: "Door"}
+        cell_name = cell_names.get(cell_type, "Unknown")
+        
+        if cell_type in [1, 2, 3]:
+            print(f"✅ Player spawned successfully in {cell_name} at ({spawn_x}, {spawn_z})")
+        else:
+            print(f"❌ WARNING: Player spawned in {cell_name}! This shouldn't happen.")
+        
+        print(f"🏰 Eye level: {player_eye_height} | Floor: {floor_height}")
         
         # Set minimum safe height for maze
-        self.player.minimum_safe_height = spawn_height + 0.2  # Very low camera height
-        print(f"👤 Player positioned at: ({self.player.position.x}, {self.player.position.y}, {self.player.position.z})")
-        print(f"🔒 Minimum safe height set to: {self.player.minimum_safe_height}")
+        self.player.minimum_safe_height = player_eye_height
+        print(f"👤 Final position: ({self.player.position.x:.1f}, {self.player.position.y:.1f}, {self.player.position.z:.1f})")
         
         self.running = True
         self.mouse_sensitivity = 0.15  # Reduced for better control
@@ -1596,42 +1643,65 @@ class Game3D:
                     self.add_message(f"🏰 Y:{self.player.position.y:.1f} Floor:{floor_h:.1f} {cell_type}", 3000)
     
     def regenerate_world(self):
-        """Generate a new random maze"""
+        """Generate a new random maze with guaranteed spawn"""
         self.maze_map = MazeMap()
         
-        # Find good spawn position in new maze
+        # Use the same reliable spawn finding logic
         spawn_x = self.maze_map.width // 2
         spawn_z = self.maze_map.height // 2
+        spawn_found = False
         
-        # Try to spawn in a room
+        # Try rooms first
         if self.maze_map.rooms:
-            room = random.choice(self.maze_map.rooms)
-            spawn_x = room['center_x']
-            spawn_z = room['center_y']
-        else:
-            # Find any floor space
-            for offset in range(1, 10):
-                for dx in range(-offset, offset + 1):
-                    for dz in range(-offset, offset + 1):
-                        test_x = spawn_x + dx
-                        test_z = spawn_z + dz
-                        if (1 <= test_x < self.maze_map.width - 1 and 
-                            1 <= test_z < self.maze_map.height - 1 and
-                            self.maze_map.maze[test_z][test_x] in [1, 2, 3]):
-                            spawn_x, spawn_z = test_x, test_z
-                            break
-                    if self.maze_map.maze[test_z][test_x] in [1, 2, 3]:
-                        break
-                if self.maze_map.maze[test_z][test_x] in [1, 2, 3]:
+            for room in self.maze_map.rooms:
+                test_x = room['center_x']
+                test_z = room['center_y']
+                if (0 <= test_x < self.maze_map.width and 
+                    0 <= test_z < self.maze_map.height and
+                    self.maze_map.maze[test_z][test_x] in [1, 2, 3]):
+                    spawn_x, spawn_z = test_x, test_z
+                    spawn_found = True
                     break
         
-        # Set maze spawn height
-        maze_height = self.maze_map.get_height(spawn_x, spawn_z)
-        new_spawn_height = maze_height + 0.2
-        self.player.position = Vector3D(spawn_x, new_spawn_height, spawn_z)
-        self.player.minimum_safe_height = maze_height + 0.2
-        print(f"🔄 Regenerated maze - player at height: {self.player.position.y}")
-        print(f"🔄 New minimum safe height: {self.player.minimum_safe_height}")
+        # Search for walkable areas if no room found
+        if not spawn_found:
+            for offset in range(1, 20):
+                for dx in range(-offset, offset + 1, 2):
+                    for dz in range(-offset, offset + 1, 2):
+                        test_x = spawn_x + dx
+                        test_z = spawn_z + dz
+                        if (0 <= test_x < self.maze_map.width and 
+                            0 <= test_z < self.maze_map.height and
+                            self.maze_map.maze[test_z][test_x] in [1, 2, 3]):
+                            spawn_x, spawn_z = test_x, test_z
+                            spawn_found = True
+                            break
+                    if spawn_found:
+                        break
+                if spawn_found:
+                    break
+        
+        # Emergency fallback
+        if not spawn_found:
+            for z in range(1, self.maze_map.height - 1, 2):
+                for x in range(1, self.maze_map.width - 1, 2):
+                    if self.maze_map.maze[z][x] in [1, 2, 3]:
+                        spawn_x, spawn_z = x, z
+                        spawn_found = True
+                        break
+                if spawn_found:
+                    break
+        
+        # Set maze spawn height using physics system
+        floor_height = self.maze_map.base_level
+        player_eye_height = floor_height + 1.7
+        self.player.position = Vector3D(spawn_x, player_eye_height, spawn_z)
+        self.player.minimum_safe_height = player_eye_height
+        # Reset physics state
+        self.player.is_jumping = False
+        self.player.velocity_y = 0
+        print(f"🔄 Regenerated maze - player at eye level: {self.player.position.y}")
+        print(f"🔄 Floor height: {floor_height}")
         self.add_message("� Új labirintus generálva!", 2000)
     
     def interact(self):
