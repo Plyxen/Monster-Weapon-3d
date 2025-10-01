@@ -33,7 +33,7 @@ class Vector3D:
         return Vector3D(0, 0, 0)
 
 class MazeMap:
-    def __init__(self, width=101, height=101, base_level=0):  # Larger maze for exploration
+    def __init__(self, width=81, height=81, base_level=0):  # Moderate sized maze for good performance
         self.width = width if width % 2 == 1 else width + 1  # Ensure odd dimensions
         self.height = height if height % 2 == 1 else height + 1
         self.base_level = base_level  # Floor level
@@ -266,6 +266,44 @@ class MazeMap:
         
         return terrain
     
+    def is_wall_occluded(self, wall_x, wall_z, player_pos, render_range=30):
+        """Check if a wall is occluded by other walls closer to the player using raycasting"""
+        # Calculate direction from player to wall
+        dx = wall_x - player_pos.x
+        dz = wall_z - player_pos.z
+        distance_to_wall = (dx*dx + dz*dz)**0.5
+        
+        # Don't cull walls that are very close
+        if distance_to_wall < 3.0:
+            return False
+            
+        # Normalize direction vector
+        if distance_to_wall == 0:
+            return False
+        dx /= distance_to_wall
+        dz /= distance_to_wall
+        
+        # Cast ray from player toward wall, checking for blocking walls
+        step_size = 0.5  # Check every 0.5 units
+        steps = int(distance_to_wall / step_size)
+        
+        for i in range(1, steps):  # Start from 1 to skip player position
+            check_x = player_pos.x + dx * (i * step_size)
+            check_z = player_pos.z + dz * (i * step_size)
+            
+            # Convert to maze coordinates
+            maze_x = int(check_x)
+            maze_z = int(check_z)
+            
+            # Check if we hit a wall that's closer than our target wall
+            if (0 <= maze_x < self.width and 0 <= maze_z < self.height and
+                self.maze[maze_z][maze_x] == 0):  # Found a blocking wall
+                # Make sure this isn't the wall we're checking
+                if abs(maze_x - wall_x) > 0.5 or abs(maze_z - wall_z) > 0.5:
+                    return True  # This wall is occluded
+                    
+        return False  # Wall is not occluded
+    
     def generate_wall_faces(self, maze_map, player):
         """Generate vertical wall faces for proper 3D wall rendering"""
         wall_triangles = []
@@ -318,7 +356,7 @@ class MazeMap:
                                     vertex, player.position, player.rotation_x, player.rotation_y,
                                     self.width, self.height
                                 )
-                                if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 100 and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
+                                if screen_pos and screen_pos[2] > 0.001 and screen_pos[2] < 100 and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
                                     screen_vertices.append(screen_pos)
                                     total_distance += screen_pos[2]
                                 else:
@@ -674,7 +712,7 @@ class Player:
         return False
 
 class Camera:
-    def __init__(self, fov=70, near=0.05, far=500):  # Minimal near clipping to prevent see-through
+    def __init__(self, fov=70, near=0.001, far=500):  # Extremely minimal near clipping
         self.fov = fov
         self.near = near
         self.far = far
@@ -700,8 +738,8 @@ class Camera:
         final_y = rel_y * cos_x - rotated_z * sin_x
         final_z = rel_y * sin_x + rotated_z * cos_x
         
-        # Clip objects behind camera or too close (minimal near clipping)
-        if final_z <= 0.05:  # Very small near plane to prevent see-through
+        # Clip objects behind camera or too close (extremely minimal near clipping)
+        if final_z <= 0.001:  # Extremely small near plane to prevent see-through
             return None
         
         # Perspective projection
@@ -869,7 +907,7 @@ class Renderer:
                             self.width, self.height
                         )
                         
-                        if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 100 and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
+                        if screen_pos and screen_pos[2] > 0.001 and screen_pos[2] < 100 and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
                             screen_points.append((screen_pos[0], screen_pos[1]))
                             avg_height += py
                             avg_distance += screen_pos[2]
@@ -970,10 +1008,12 @@ class Renderer:
     def render_maze_walls(self, maze_map, player):
         """Render vertical wall faces as solid surfaces with proper depth sorting"""
         wall_quads = []
+        walls_considered = 0
+        walls_culled = 0
         
         # Check area around player for walls
         player_x, player_z = int(player.position.x), int(player.position.z)
-        render_range = 25  # Balanced range - enough to see but not too much to render
+        render_range = 25  # Balanced range for moderate sized maze
         
         for z in range(max(0, player_z - render_range), min(maze_map.height, player_z + render_range)):
             for x in range(max(0, player_x - render_range), min(maze_map.width, player_x + render_range)):
@@ -981,6 +1021,10 @@ class Renderer:
                     # Distance culling for walls - don't render walls too far away
                     distance_to_wall = ((x - player.position.x)**2 + (z - player.position.z)**2)**0.5
                     if distance_to_wall > render_range + 5:  # Extended range to prevent pop-in
+                        continue
+                        
+                    # Occlusion culling - skip walls that are behind other walls
+                    if maze_map.is_wall_occluded(x, z, player.position):
                         continue
                         
                     # Check adjacent cells to create wall faces
@@ -1020,21 +1064,28 @@ class Renderer:
                                     v3 = Vector3D(x, floor_level + wall_height, z + 1)
                                     v4 = Vector3D(x, floor_level + wall_height, z)
                             
-                            # Project vertices to screen
+                            # Project vertices to screen with improved clipping
                             screen_vertices = []
                             distances = []
+                            all_vertices_projected = []
                             
                             for vertex in [v1, v2, v3, v4]:
                                 screen_pos = self.camera.project_3d_to_2d(
                                     vertex, player.position, player.rotation_x, player.rotation_y,
                                     self.width, self.height
                                 )
-                                if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 150 and -50 <= screen_pos[0] < self.width + 50 and -50 <= screen_pos[1] < self.height + 50:
-                                    screen_vertices.append((screen_pos[0], screen_pos[1]))
+                                if screen_pos and screen_pos[2] > 0.001:  # Only check near plane, not screen bounds
+                                    # Clamp coordinates to extended screen bounds to prevent drawing errors
+                                    clamped_x = max(-200, min(self.width + 200, screen_pos[0]))
+                                    clamped_y = max(-200, min(self.height + 200, screen_pos[1]))
+                                    screen_vertices.append((clamped_x, clamped_y))
                                     distances.append(screen_pos[2])
+                                    all_vertices_projected.append(True)
+                                else:
+                                    all_vertices_projected.append(False)
                             
-                            # Collect wall quad for depth sorting
-                            if len(screen_vertices) == 4:
+                            # Render wall quad if at least 2 vertices are visible (improved partial rendering)
+                            if len(screen_vertices) >= 2:
                                 avg_distance = sum(distances) / 4
                                 
                                 # Wall color with distance-based lighting
@@ -1066,8 +1117,8 @@ class Renderer:
         grid_size = 2  # Larger grid for better visibility
         ground_quads = []
         
-        # Calculate visible range around player - extended to prevent pop-in but not excessive
-        render_distance = 35  # Extended slightly beyond visible range
+        # Calculate visible range around player - optimized for moderate maze
+        render_distance = 35  # Balanced for moderate sized maze
         start_x = max(0, int(player.position.x - render_distance))
         end_x = min(maze_map.width, int(player.position.x + render_distance))
         start_z = max(0, int(player.position.z - render_distance))
@@ -1103,7 +1154,7 @@ class Renderer:
                             self.width, self.height
                         )
                         
-                        if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 120:
+                        if screen_pos and screen_pos[2] > 0.001 and screen_pos[2] < 120:
                             screen_corners.append((screen_pos[0], screen_pos[1]))
                             total_distance += screen_pos[2]
                     
@@ -1146,7 +1197,7 @@ class Renderer:
             if not monster['defeated']:
                 # Distance culling - only render monsters within reasonable range
                 distance_to_monster = ((x - player.position.x)**2 + (z - player.position.z)**2)**0.5
-                if distance_to_monster > 50:  # Don't render monsters too far away
+                if distance_to_monster > 50:  # Balanced range for moderate maze
                     continue
                     
                 height = maze_map.get_height(x, z) + 2
@@ -1166,7 +1217,7 @@ class Renderer:
             if not treasure['opened']:
                 # Distance culling - only render treasures within reasonable range
                 distance_to_treasure = ((x - player.position.x)**2 + (z - player.position.z)**2)**0.5
-                if distance_to_treasure > 40:  # Don't render treasures too far away
+                if distance_to_treasure > 40:  # Balanced range for moderate maze
                     continue
                     
                 height = maze_map.get_height(x, z) + 1
