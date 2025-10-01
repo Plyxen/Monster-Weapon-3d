@@ -1,0 +1,31 @@
+🎮 Monster Weapons 3D - Improvements Made
+
+✅ FIXED ISSUES:
+1. 🐭 Mouse Controls: Fixed inverted Y-axis movement
+2. 🎯 Camera Movement: WASD now moves relative to where you look (like FPS games)
+3. 🌍 Proper Ground: Created flat ground plane with elevated hills instead of floating blocks
+4. 🏃 Collision System: Improved collision detection with step climbing
+
+🎮 CONTROLS:
+- WASD: Move (camera-relative - W moves forward where you look)
+- Mouse: Look around (natural FPS controls)
+- SHIFT + WASD: Move faster
+- E: Interact with monsters/treasures
+- R: Generate new world
+- +/-: Adjust mouse sensitivity
+- F: Fullscreen
+- ESC: Exit
+
+🌍 WORLD FEATURES:
+- Flat ground base with grid reference
+- Random hills and elevated areas
+- Border walls to prevent falling off
+- Smooth collision detection
+- Monsters spawn on accessible areas
+- Treasures placed on flat/low hill areas
+
+🎯 GAMEPLAY:
+- Fight monsters for XP and level up
+- Collect treasures for health/points
+- Explore randomly generated worlds
+- Camera-relative movement like modern FPS games
