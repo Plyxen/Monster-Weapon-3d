@@ -452,9 +452,9 @@ class MazeMap:
         return treasures
     
     def get_floor_height(self, x, z):
-        """Get floor height - returns the actual floor surface level"""
-        # Floor surface is below base level so player walks above it
-        return self.base_level - 2.0
+        """Get floor height - returns floor 1 unit below base level"""
+        # Floor is 1 unit below where walls start from
+        return self.base_level - 1.0
     
     def get_height(self, x, z):
         """Get terrain height at given coordinates with bounds checking"""
@@ -469,7 +469,7 @@ class MazeMap:
 
 class Player:
     def __init__(self, start_x=20, start_z=20):
-        self.position = Vector3D(start_x, 0.2, start_z)  # Start at proper ground level
+        self.position = Vector3D(start_x, 0.7, start_z)  # Start at eye level above floor
         self.rotation_y = 0  # Horizontal rotation
         self.rotation_x = 0  # Look straight ahead normally  
         self.speed = 0.8  # Much faster movement for larger spaces
@@ -491,13 +491,14 @@ class Player:
         if not self.is_jumping and abs(self.velocity_y) < 0.1:  # Only jump if on ground
             self.velocity_y = self.jump_strength
             self.is_jumping = True
+            print(f"🦘 Player jumped! Velocity: {self.velocity_y}")  # Debug jump
     
     def apply_physics(self, maze_map, dt=1.0/60.0):
         """Apply physics: gravity, ground collision, etc."""
-        # Get floor height (floor surface level)
-        floor_height = maze_map.get_floor_height(self.position.x, self.position.z)
-        player_height = 1.7  # Standard FPS player height (eye level above floor)
-        ground_level = floor_height + player_height  # Player eye level above floor surface
+        # Get floor height (floor is 1 unit below base level)
+        floor_height = maze_map.base_level - 1.0
+        player_eye_height = 1.7  # Player eye level above their feet
+        ground_level = floor_height + player_eye_height  # Player eye level when standing on floor
         
         # Apply gravity
         self.velocity_y += self.gravity * dt
@@ -505,7 +506,7 @@ class Player:
         # Update Y position
         self.position.y += self.velocity_y * dt
         
-        # Ground collision
+        # Ground collision - check if player hits the floor
         if self.position.y <= ground_level:
             self.position.y = ground_level
             self.velocity_y = 0
@@ -517,20 +518,12 @@ class Player:
             self.velocity_y = 0
     
     def update_position(self, maze_map):
-        """Update player position with physics"""
-        # Apply physics every frame
-        self.apply_physics(maze_map)
-        
-        # Ensure minimum height is maintained
-        floor_height = maze_map.get_floor_height(self.position.x, self.position.z)
-        min_height = floor_height + 1.7  # Eye level height
-        
-        if self.position.y < min_height and not self.is_jumping:
-            self.position.y = min_height
-            self.velocity_y = 0
+        """Update player position with physics - deprecated, physics now in main loop"""
+        # Physics are now applied continuously in the main game loop
+        pass
     
     def can_move_to(self, new_x, new_z, maze_map):
-        """Maze-based collision detection - only allow movement in walkable areas"""
+        """Enhanced collision detection - only allow movement in walkable areas with better feedback"""
         # Check map boundaries
         if not (0 <= new_x < maze_map.width and 0 <= new_z < maze_map.height):
             return False
@@ -544,6 +537,15 @@ class Player:
             return True
         
         return False  # Block movement into walls (0) or other non-walkable areas
+    
+    def is_on_ground(self, maze_map):
+        """Check if player is currently on the ground"""
+        floor_height = maze_map.get_floor_height(self.position.x, self.position.z)
+        player_eye_height = 1.7
+        ground_level = floor_height + player_eye_height
+        
+        # Player is on ground if they're at or very close to ground level
+        return abs(self.position.y - ground_level) < 0.1
     
     def move_forward(self, maze_map):
         """Move forward in the direction the camera is looking (W key)"""
@@ -1064,14 +1066,19 @@ class Renderer:
         start_z = max(0, int(player.position.z - 30))
         end_z = min(maze_map.height, int(player.position.z + 30))
         
-        # Render floor in ALL areas (both walkable and walls will have floor)
+        # Render floor ONLY in walkable areas (where player can actually stand)
         for z in range(start_z, end_z - grid_size, grid_size):
             for x in range(start_x, end_x - grid_size, grid_size):
-                # Always render floor - we want to see it everywhere
-                if (0 <= x < maze_map.width and 0 <= z < maze_map.height):
+                # Check if this area is walkable (corridors=1, rooms=2, doors=3)
+                maze_x = max(0, min(maze_map.width - 1, int(x + grid_size/2)))
+                maze_z = max(0, min(maze_map.height - 1, int(z + grid_size/2)))
+                
+                # Only render floor where player can actually walk
+                if (0 <= maze_x < maze_map.width and 0 <= maze_z < maze_map.height and 
+                    maze_map.maze[maze_z][maze_x] in [1, 2, 3]):  # Only walkable areas
                     
-                    # Create floor quad BELOW player position so it appears under feet
-                    floor_y = maze_map.base_level - 2.0  # Much lower than player eye level (1.7)
+                    # Create floor quad BELOW player feet
+                    floor_y = maze_map.base_level - 1.0  # Floor 1 unit below base level
                     corners = [
                         Vector3D(x, floor_y, z),
                         Vector3D(x + grid_size, floor_y, z),
@@ -1097,14 +1104,11 @@ class Renderer:
                     if len(screen_corners) == 4:
                         avg_distance = total_distance / 4
                         if avg_distance < 50:
-                            # Determine floor color based on area type - MUCH brighter
-                            if maze_map.maze[z][x] in [1, 2, 3]:  # Walkable areas
-                                if maze_map.maze[z][x] == 2:  # Room
-                                    base_color = (120, 150, 180)  # Much brighter blue for room floors
-                                else:  # Corridor
-                                    base_color = (100, 140, 100)  # Much brighter green for corridor floors
-                            else:  # Wall areas - still show floor but dimmer
-                                base_color = (60, 60, 60)  # Lighter gray floor under walls
+                            # Floor color for walkable areas - very bright and visible
+                            if maze_map.maze[maze_z][maze_x] == 2:  # Room
+                                base_color = (140, 170, 200)  # Bright blue for room floors
+                            else:  # Corridor (1) or door (3)
+                                base_color = (120, 160, 120)  # Bright green for corridor floors
                             
                             ground_quads.append((screen_corners, avg_distance, base_color))
         
@@ -1518,8 +1522,8 @@ class Game3D:
         self.player = Player(spawn_x, spawn_z)
         
         # Force player to spawn at proper maze height using physics
-        floor_height = self.maze_map.get_floor_height(spawn_x, spawn_z)  # Get actual floor surface level
-        player_eye_height = floor_height + 1.7  # Standard FPS eye level above floor surface
+        floor_height = self.maze_map.get_floor_height(spawn_x, spawn_z)  # Floor is base_level - 1.0
+        player_eye_height = floor_height + 1.7  # Eye level 1.7 units above floor
         self.player.position = Vector3D(spawn_x, player_eye_height, spawn_z)
         self.player.velocity_y = 0  # Start with no vertical velocity
         self.player.is_jumping = False  # Start on ground
@@ -1697,7 +1701,7 @@ class Game3D:
         
         # Set maze spawn height using physics system
         floor_height = self.maze_map.get_floor_height(spawn_x, spawn_z)
-        player_eye_height = floor_height + 1.7
+        player_eye_height = floor_height + 1.0
         self.player.position = Vector3D(spawn_x, player_eye_height, spawn_z)
         self.player.minimum_safe_height = player_eye_height
         # Reset physics state
@@ -1847,7 +1851,13 @@ class Game3D:
         print("   ESC - Kilépés")
         
         while self.running:
+            # Calculate delta time for physics
+            dt = self.renderer.clock.get_time() / 1000.0  # Convert milliseconds to seconds
+            
             self.handle_input()
+            
+            # Apply physics EVERY frame (gravity, collision, etc.)
+            self.player.apply_physics(self.maze_map, dt)
             
             # Render everything
             self.renderer.render_terrain(self.maze_map, self.player)
