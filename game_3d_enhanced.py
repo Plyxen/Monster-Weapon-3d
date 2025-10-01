@@ -461,12 +461,16 @@ class MazeMap:
 
 class Player:
     def __init__(self, start_x=20, start_z=20):
-        self.position = Vector3D(start_x, 100, start_z)  # Start ULTRA high to avoid underground
+        self.position = Vector3D(start_x, 0.2, start_z)  # Start at proper ground level
         self.rotation_y = 0  # Horizontal rotation
         self.rotation_x = 0  # Vertical rotation  
         self.speed = 0.8  # Much faster movement for larger spaces
         self.max_hp = 5
         self.hp = self.max_hp
+        self.velocity_y = 0  # Vertical velocity for jumping
+        self.is_jumping = False
+        self.jump_strength = 3.0
+        self.gravity = -9.8
         self.weapon = "kard"
         self.weapon_emoji = "⚔️"
         self.stats = create_stats()
@@ -474,8 +478,14 @@ class Player:
         self.level = 1
         self.minimum_safe_height = None  # Will be set by game initialization
         
+    def jump(self):
+        """Make player jump if on ground"""
+        if not self.is_jumping:
+            self.velocity_y = self.jump_strength
+            self.is_jumping = True
+    
     def update_position(self, maze_map):
-        """Keep player at proper height in maze"""
+        """Keep player at proper height in maze with jump physics"""
         floor_height = maze_map.get_height(self.position.x, self.position.z)
         
         # Ensure floor_height is never None
@@ -483,14 +493,27 @@ class Player:
             floor_height = maze_map.base_level
             
         # Much lower camera position
-        player_height = 0.5  # Low camera height
+        player_height = 0.2  # Very low camera height
         target_y = floor_height + player_height
         
-        # Smooth height adjustment
-        height_diff = abs(self.position.y - target_y)
-        if height_diff > 0.1:
-            # Quick adjustment to proper floor height
-            self.position.y = target_y
+        # Apply gravity and jumping physics
+        if self.is_jumping:
+            # Update vertical velocity with gravity (frame-rate independent)
+            dt = 1.0 / 60.0  # Assume 60 FPS
+            self.velocity_y += self.gravity * dt
+            self.position.y += self.velocity_y * dt
+            
+            # Check if landed
+            if self.position.y <= target_y:
+                self.position.y = target_y
+                self.velocity_y = 0
+                self.is_jumping = False
+        else:
+            # Normal ground following when not jumping
+            height_diff = abs(self.position.y - target_y)
+            if height_diff > 0.1:
+                # Quick adjustment to proper floor height
+                self.position.y = target_y
     
     def can_move_to(self, new_x, new_z, maze_map):
         """Maze-based collision detection"""
@@ -1328,6 +1351,7 @@ class Renderer:
         controls = [
             "Vezérlés:",
             "WASD - Mozgás",
+            "SPACE - Ugrás",
             "Egér - Forgás", 
             "E - Interakció",
             "+/- Egér érzék.",
@@ -1458,12 +1482,12 @@ class Game3D:
         
         # Force player to spawn at proper maze height
         spawn_height = self.maze_map.base_level  # Use flat base level
-        safe_spawn_height = spawn_height + 0.5  # Much lower camera position
+        safe_spawn_height = spawn_height + 0.2  # Very low camera position
         self.player.position = Vector3D(spawn_x, safe_spawn_height, spawn_z)
         print(f"🏰 MAZE spawn height: {safe_spawn_height} (floor: {spawn_height})")
         
         # Set minimum safe height for maze
-        self.player.minimum_safe_height = spawn_height + 0.5  # Lower camera height
+        self.player.minimum_safe_height = spawn_height + 0.2  # Very low camera height
         print(f"👤 Player positioned at: ({self.player.position.x}, {self.player.position.y}, {self.player.position.z})")
         print(f"🔒 Minimum safe height set to: {self.player.minimum_safe_height}")
         
@@ -1496,6 +1520,10 @@ class Game3D:
         move_speed = self.player.speed
         if keys[pygame.K_LSHIFT]:  # Run faster with shift
             move_speed *= 1.8
+        
+        # Jump control
+        if keys[pygame.K_SPACE]:
+            self.player.jump()
         
         if keys[pygame.K_w]:
             old_speed = self.player.speed
@@ -1599,9 +1627,9 @@ class Game3D:
         
         # Set maze spawn height
         maze_height = self.maze_map.get_height(spawn_x, spawn_z)
-        new_spawn_height = maze_height + 3.0
+        new_spawn_height = maze_height + 0.2
         self.player.position = Vector3D(spawn_x, new_spawn_height, spawn_z)
-        self.player.minimum_safe_height = maze_height + 1.0
+        self.player.minimum_safe_height = maze_height + 0.2
         print(f"🔄 Regenerated maze - player at height: {self.player.position.y}")
         print(f"🔄 New minimum safe height: {self.player.minimum_safe_height}")
         self.add_message("� Új labirintus generálva!", 2000)
