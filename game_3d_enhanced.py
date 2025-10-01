@@ -318,7 +318,7 @@ class MazeMap:
                                     vertex, player.position, player.rotation_x, player.rotation_y,
                                     self.width, self.height
                                 )
-                                if screen_pos and screen_pos[2] > 0.1 and screen_pos[2] < 50:
+                                if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 100 and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
                                     screen_vertices.append(screen_pos)
                                     total_distance += screen_pos[2]
                                 else:
@@ -472,7 +472,7 @@ class Player:
         self.position = Vector3D(start_x, 0.7, start_z)  # Start at eye level above floor
         self.rotation_y = 0  # Horizontal rotation
         self.rotation_x = 0  # Look straight ahead normally  
-        self.speed = 0.8  # Much faster movement for larger spaces
+        self.speed = 0.2  # Much slower, more controllable movement
         self.max_hp = 5
         self.hp = self.max_hp
         self.velocity_y = 0  # Vertical velocity for jumping
@@ -523,9 +523,10 @@ class Player:
         pass
     
     def can_move_to(self, new_x, new_z, maze_map):
-        """Enhanced collision detection - only allow movement in walkable areas with better feedback"""
-        # Check map boundaries
-        if not (0 <= new_x < maze_map.width and 0 <= new_z < maze_map.height):
+        """Simplified collision detection to prevent rendering issues"""
+        # Check map boundaries with small buffer
+        buffer = 0.2  # Smaller buffer to prevent complex calculations
+        if not (buffer <= new_x < maze_map.width - buffer and buffer <= new_z < maze_map.height - buffer):
             return False
         
         # Check if destination is walkable in maze
@@ -673,7 +674,7 @@ class Player:
         return False
 
 class Camera:
-    def __init__(self, fov=70, near=0.1, far=500):  # Much further clipping for taller walls and larger spaces
+    def __init__(self, fov=70, near=0.05, far=500):  # Minimal near clipping to prevent see-through
         self.fov = fov
         self.near = near
         self.far = far
@@ -699,8 +700,8 @@ class Camera:
         final_y = rel_y * cos_x - rotated_z * sin_x
         final_z = rel_y * sin_x + rotated_z * cos_x
         
-        # Clip objects behind camera or too close
-        if final_z <= 0.1:
+        # Clip objects behind camera or too close (minimal near clipping)
+        if final_z <= 0.05:  # Very small near plane to prevent see-through
             return None
         
         # Perspective projection
@@ -868,7 +869,7 @@ class Renderer:
                             self.width, self.height
                         )
                         
-                        if screen_pos and screen_pos[2] > 0:
+                        if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 100 and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
                             screen_points.append((screen_pos[0], screen_pos[1]))
                             avg_height += py
                             avg_distance += screen_pos[2]
@@ -972,11 +973,16 @@ class Renderer:
         
         # Check area around player for walls
         player_x, player_z = int(player.position.x), int(player.position.z)
-        render_range = 25  # Reduced to show less walls and more floor
+        render_range = 25  # Balanced range - enough to see but not too much to render
         
         for z in range(max(0, player_z - render_range), min(maze_map.height, player_z + render_range)):
             for x in range(max(0, player_x - render_range), min(maze_map.width, player_x + render_range)):
                 if maze_map.maze[z][x] == 0:  # This is a wall
+                    # Distance culling for walls - don't render walls too far away
+                    distance_to_wall = ((x - player.position.x)**2 + (z - player.position.z)**2)**0.5
+                    if distance_to_wall > render_range + 5:  # Extended range to prevent pop-in
+                        continue
+                        
                     # Check adjacent cells to create wall faces
                     directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  # North, East, South, West
                     
@@ -1023,7 +1029,7 @@ class Renderer:
                                     vertex, player.position, player.rotation_x, player.rotation_y,
                                     self.width, self.height
                                 )
-                                if screen_pos and screen_pos[2] > 0.1 and screen_pos[2] < 80:  # Increased for taller walls
+                                if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 150 and -50 <= screen_pos[0] < self.width + 50 and -50 <= screen_pos[1] < self.height + 50:
                                     screen_vertices.append((screen_pos[0], screen_pos[1]))
                                     distances.append(screen_pos[2])
                             
@@ -1060,11 +1066,12 @@ class Renderer:
         grid_size = 2  # Larger grid for better visibility
         ground_quads = []
         
-        # Calculate visible range around player
-        start_x = max(0, int(player.position.x - 30))
-        end_x = min(maze_map.width, int(player.position.x + 30))
-        start_z = max(0, int(player.position.z - 30))
-        end_z = min(maze_map.height, int(player.position.z + 30))
+        # Calculate visible range around player - extended to prevent pop-in but not excessive
+        render_distance = 35  # Extended slightly beyond visible range
+        start_x = max(0, int(player.position.x - render_distance))
+        end_x = min(maze_map.width, int(player.position.x + render_distance))
+        start_z = max(0, int(player.position.z - render_distance))
+        end_z = min(maze_map.height, int(player.position.z + render_distance))
         
         # Render floor ONLY in walkable areas (where player can actually stand)
         for z in range(start_z, end_z - grid_size, grid_size):
@@ -1096,14 +1103,14 @@ class Renderer:
                             self.width, self.height
                         )
                         
-                        if screen_pos and screen_pos[2] > 0.1:
+                        if screen_pos and screen_pos[2] > 0.05 and screen_pos[2] < 120:
                             screen_corners.append((screen_pos[0], screen_pos[1]))
                             total_distance += screen_pos[2]
                     
                     # Only render if all corners are visible
                     if len(screen_corners) == 4:
                         avg_distance = total_distance / 4
-                        if avg_distance < 50:
+                        if avg_distance < 80:  # Increased distance for better floor visibility
                             # Floor color for walkable areas - very bright and visible
                             if maze_map.maze[maze_z][maze_x] == 2:  # Room
                                 base_color = (140, 170, 200)  # Bright blue for room floors
@@ -1119,7 +1126,7 @@ class Renderer:
         for screen_corners, distance, base_color in ground_quads:
             try:
                 # Distance-based lighting with better visibility
-                fade_factor = max(0.5, 1.0 - distance / 30)  # Brighter and further visibility
+                fade_factor = max(0.7, 1.0 - distance / 50)  # Much brighter and further visibility
                 color = tuple(int(c * fade_factor) for c in base_color)
                 
                 pygame.draw.polygon(self.screen, color, screen_corners)
@@ -1134,9 +1141,14 @@ class Renderer:
         """Render monsters, treasures with enhanced 3D graphics"""
         objects = []
         
-        # Collect monsters
+        # Collect monsters with proper culling
         for (x, z), monster in maze_map.monsters.items():
             if not monster['defeated']:
+                # Distance culling - only render monsters within reasonable range
+                distance_to_monster = ((x - player.position.x)**2 + (z - player.position.z)**2)**0.5
+                if distance_to_monster > 50:  # Don't render monsters too far away
+                    continue
+                    
                 height = maze_map.get_height(x, z) + 2
                 world_pos = Vector3D(x, height, z)
                 
@@ -1145,12 +1157,18 @@ class Renderer:
                     self.width, self.height
                 )
                 
-                if screen_pos and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
+                # Extended screen bounds - render slightly outside visible area to prevent pop-in
+                if screen_pos and screen_pos[2] > 0.1 and screen_pos[2] < 100 and -100 <= screen_pos[0] < self.width + 100 and -100 <= screen_pos[1] < self.height + 100:
                     objects.append(('monster', screen_pos, monster, (x, z)))
         
-        # Collect treasures
+        # Collect treasures with proper culling
         for (x, z), treasure in maze_map.treasures.items():
             if not treasure['opened']:
+                # Distance culling - only render treasures within reasonable range
+                distance_to_treasure = ((x - player.position.x)**2 + (z - player.position.z)**2)**0.5
+                if distance_to_treasure > 40:  # Don't render treasures too far away
+                    continue
+                    
                 height = maze_map.get_height(x, z) + 1
                 world_pos = Vector3D(x, height, z)
                 
@@ -1159,7 +1177,8 @@ class Renderer:
                     self.width, self.height
                 )
                 
-                if screen_pos and 0 <= screen_pos[0] < self.width and 0 <= screen_pos[1] < self.height:
+                # Extended screen bounds - render slightly outside visible area to prevent pop-in
+                if screen_pos and screen_pos[2] > 0.1 and screen_pos[2] < 80 and -100 <= screen_pos[0] < self.width + 100 and -100 <= screen_pos[1] < self.height + 100:
                     objects.append(('treasure', screen_pos, treasure, (x, z)))
         
         # Sort objects by distance (furthest first)
@@ -1603,7 +1622,7 @@ class Game3D:
         # Mouse look (natural FPS controls) - FIXED Y-axis inversion
         mouse_dx, mouse_dy = pygame.mouse.get_rel()
         self.player.rotation_y -= mouse_dx * self.mouse_sensitivity  # Natural: mouse right = look right
-        self.player.rotation_x += mouse_dy * self.mouse_sensitivity  # FIXED: mouse up = look up, mouse down = look down
+        self.player.rotation_x -= mouse_dy * self.mouse_sensitivity  # FIXED: mouse up = look up, mouse down = look down
         
         # Clamp vertical rotation
         self.player.rotation_x = max(-80, min(80, self.player.rotation_x))
